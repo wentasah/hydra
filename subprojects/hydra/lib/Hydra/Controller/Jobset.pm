@@ -7,6 +7,7 @@ use base 'Hydra::Base::Controller::ListBuilds';
 use Hydra::Helper::Nix;
 use Hydra::Helper::CatalystUtils;
 use Hydra::Config;
+use JSON::MaybeXS;
 
 
 sub jobsetChain :Chained('/') :PathPart('jobset') :CaptureArgs(2) {
@@ -34,6 +35,36 @@ sub jobsetChain :Chained('/') :PathPart('jobset') :CaptureArgs(2) {
     $c->stash->{params}->{name} //= $jobsetName;
 }
 
+sub shield :Chained('jobsetChain') PathPart('shield') Args(0) {
+    my ($self, $c) = @_;
+
+    my $latestEval = $c->stash->{jobset}->jobsetevals->search(
+        { hasnewbuilds => 1, nrsucceeded => { '!=', undef }, },
+        { rows => 1, order_by => ["id desc"] })->single;
+
+    my $nrSucceeded = $latestEval->get_column('nrsucceeded');
+    my $nrTotal = $latestEval->get_column('nrbuilds');
+    my $successrate = int(( $nrSucceeded / $nrTotal ) * 100);
+
+    my $color =
+        $successrate >= 90 ? "brightgreen" :
+        $successrate >= 80 ? "green" :
+        $successrate >= 70 ? "yellow" :
+        $successrate >= 50 ? "orange" :
+        "red";
+
+    $c->response->content_type('application/json');
+    $c->stash->{'plain'} = {
+        data => scalar (encode_json(
+            {
+                schemaVersion => 1,
+                color => $color,
+                label => "$nrSucceeded/$nrTotal",
+                message => "${successrate}%",
+            }))
+    };
+    $c->forward('Hydra::View::Plain');
+}
 
 sub jobset :Chained('jobsetChain') :PathPart('') :Args(0) :ActionClass('REST::ForBrowsers') { }
 
